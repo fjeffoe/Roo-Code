@@ -49,3 +49,5 @@ logs
 
 # Qdrant
 qdrant_storage/
+*.rar
+.tours

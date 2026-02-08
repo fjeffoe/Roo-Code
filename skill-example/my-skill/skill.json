@@ -1,0 +1,13 @@
+{
+	"name": "my-custom-skill",
+	"version": "1.0.0",
+	"description": "A custom skill for working with Roo Code projects",
+	"author": "Your Name",
+	"keywords": ["roo-code", "vscode", "extension", "ai", "coding"],
+	"files": ["SKILL.md"],
+	"dependencies": [],
+	"compatibility": {
+		"agents": ["claude", "codex", "general-ai"],
+		"minVersion": "1.0.0"
+	}
+}
