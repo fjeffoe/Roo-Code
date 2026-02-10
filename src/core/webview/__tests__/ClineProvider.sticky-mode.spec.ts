@@ -72,6 +72,8 @@ vi.mock("../../task/Task", () => ({
 		setParentTask: vi.fn(),
 		setRootTask: vi.fn(),
 		emit: vi.fn(),
+		on: vi.fn(),
+		off: vi.fn(),
 		parentTask: options.parentTask,
 	})),
 }))
@@ -332,9 +334,12 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "test-task-id",
 				taskMode: "code", // Initial mode
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -779,9 +784,12 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "test-task-id",
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -842,12 +850,15 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "test-task-id",
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn().mockImplementation(async () => {
 					// Simulate slow save
 					await new Promise((resolve) => setTimeout(resolve, 100))
 				}),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -896,9 +907,12 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "test-task-id",
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -930,9 +944,12 @@ describe("ClineProvider - Sticky Mode", () => {
 						throw new Error("Emit failed")
 					}
 				}),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -962,17 +979,16 @@ describe("ClineProvider - Sticky Mode", () => {
 			// Clear previous mock calls to isolate this test
 			vi.mocked(mockContext.globalState.update).mockClear()
 
-			// The handleModeSwitch method doesn't catch errors from emit, so it will throw
-			// The error is thrown before the task's mode is updated
-			await expect(provider.handleModeSwitch("architect")).rejects.toThrow("Emit failed")
+			// The handleModeSwitch method catches errors from emit, so it won't throw
+			// The error is logged but doesn't prevent the mode switch
+			await provider.handleModeSwitch("architect")
 
-			// Since the error is thrown before updating the task's _taskMode,
-			// neither the task mode nor global state are updated
+			// Since the error is caught, the mode switch should still proceed
 			const modeCalls = vi.mocked(mockContext.globalState.update).mock.calls.filter((call) => call[0] === "mode")
-			expect(modeCalls.length).toBe(0)
+			expect(modeCalls.length).toBeGreaterThan(0)
 
-			// The task's mode should NOT have been updated since the error occurred first
-			expect(mockTask._taskMode).toBe("code")
+			// The task's mode should have been updated despite the emit error
+			expect(mockTask._taskMode).toBe("architect")
 
 			consoleErrorSpy.mockRestore()
 		})
@@ -985,9 +1001,12 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "test-task-id",
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add task to provider stack
@@ -1031,27 +1050,36 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: "task-1",
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			const task2 = {
 				taskId: "task-2",
 				_taskMode: "architect",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			const task3 = {
 				taskId: "task-3",
 				_taskMode: "debug",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}
 
 			// Add tasks to provider stack
@@ -1190,9 +1218,12 @@ describe("ClineProvider - Sticky Mode", () => {
 				taskId: `task-${i}`,
 				_taskMode: "code",
 				emit: vi.fn(),
+				on: vi.fn(),
+				off: vi.fn(),
 				saveClineMessages: vi.fn(),
 				clineMessages: [],
 				apiConversationHistory: [],
+				abortTask: vi.fn().mockResolvedValue(undefined),
 			}))
 
 			// Add all tasks to provider

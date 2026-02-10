@@ -676,6 +676,19 @@ export const webviewMessageHandler = async (
 		case "showTaskWithId":
 			provider.showTaskWithId(message.text!)
 			break
+		case "switchTask":
+			if (message.text) {
+				provider.setFocusedTask(message.text)
+				await provider.postStateToWebview()
+			}
+			break
+		case "showTaskOverview":
+			// 显示任务概览 - 可以触发UI显示所有活跃任务
+			provider.log("Task overview requested")
+			// 这里可以添加显示任务概览的逻辑
+			// 例如：发送包含所有任务信息的消息到webview
+			await provider.postStateToWebview()
+			break
 		case "condenseTaskContextRequest":
 			provider.condenseTaskContext(message.text!)
 			break

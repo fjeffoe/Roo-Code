@@ -87,6 +87,7 @@ import { ContextProxy } from "../config/ContextProxy"
 import { ProviderSettingsManager } from "../config/ProviderSettingsManager"
 import { CustomModesManager } from "../config/CustomModesManager"
 import { Task } from "../task/Task"
+import { TaskScheduler } from "../task/TaskScheduler"
 import { getSystemPromptFilePath } from "../prompts/sections/custom-system-prompt"
 
 import { webviewMessageHandler } from "./webviewMessageHandler"
@@ -94,6 +95,7 @@ import type { ClineMessage } from "@roo-code/types"
 import { readApiMessages, saveApiMessages, saveTaskMessages } from "../task-persistence"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
+import type { TaskInfo } from "../../shared/ExtensionMessage"
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -127,7 +129,10 @@ export class ClineProvider
 	private disposables: vscode.Disposable[] = []
 	private webviewDisposables: vscode.Disposable[] = []
 	private view?: vscode.WebviewView | vscode.WebviewPanel
-	private clineStack: Task[] = []
+	// 多任务并发支持：将栈结构改为调度器管理
+	private taskScheduler: TaskScheduler
+	private clineStack: Task[] = [] // 保持向后兼容，但逐渐迁移到调度器
+	private focusedTaskId?: string // 当前焦点任务ID（在多任务环境中）
 	private codeIndexStatusSubscription?: vscode.Disposable
 	private codeIndexManager?: CodeIndexManager
 	private _workspaceTracker?: WorkspaceTracker // workSpaceTracker read-only for access outside this class
@@ -157,6 +162,9 @@ export class ClineProvider
 	) {
 		super()
 		this.currentWorkspacePath = getWorkspacePath()
+
+		// 初始化任务调度器，支持多任务并发
+		this.taskScheduler = new TaskScheduler(3) // 默认最大3个并发任务
 
 		ClineProvider.activeInstances.add(this)
 
@@ -397,9 +405,24 @@ export class ClineProvider
 	// When the task is completed, the top instance is removed, reactivating the
 	// previous task.
 	async addClineToStack(task: Task) {
-		// Add this cline instance into the stack that represents the order of
-		// all the called tasks.
+		// 向后兼容：保持栈结构
 		this.clineStack.push(task)
+
+		// 设置新任务为焦点任务
+		this.setFocusedTask(task.taskId)
+
+		// 使用任务调度器管理并发执行
+		try {
+			await this.taskScheduler.scheduleTask(task)
+			this.log(`Task ${task.taskId} scheduled via TaskScheduler`)
+		} catch (error) {
+			this.log(`Failed to schedule task ${task.taskId}: ${error}`)
+			// 如果调度失败，回退到传统栈行为
+			this.clineStack.pop()
+			this.focusedTaskId = undefined
+			throw error
+		}
+
 		task.emit(RooCodeEventName.TaskFocused)
 
 		// Perform special setup provider specific tasks.
@@ -411,6 +434,142 @@ export class ClineProvider
 		if (!state || typeof state.mode !== "string") {
 			throw new Error(t("common:errors.retrieve_current_mode"))
 		}
+	}
+
+	/**
+	 * 设置焦点任务
+	 * @param taskId 要设置为焦点的任务ID
+	 */
+	public setFocusedTask(taskId: string): void {
+		const previousFocusedTaskId = this.focusedTaskId
+		this.focusedTaskId = taskId
+
+		// 触发任务焦点变化事件
+		if (previousFocusedTaskId && previousFocusedTaskId !== taskId) {
+			const previousTask = this.getTaskById(previousFocusedTaskId)
+			if (previousTask) {
+				previousTask.emit(RooCodeEventName.TaskUnfocused)
+			}
+		}
+
+		const newTask = this.getTaskById(taskId)
+		if (newTask) {
+			newTask.emit(RooCodeEventName.TaskFocused)
+		}
+
+		this.log(`Focused task changed from ${previousFocusedTaskId || "none"} to ${taskId}`)
+	}
+
+	/**
+	 * 根据任务ID获取任务
+	 * @param taskId 任务ID
+	 */
+	private getTaskById(taskId: string): Task | undefined {
+		// 首先在调度器的活跃任务中查找
+		const activeTasks = this.taskScheduler.getActiveTasks()
+		const task = activeTasks.find((t) => t.taskId === taskId)
+		if (task) {
+			return task
+		}
+
+		// 然后在栈中查找（向后兼容）
+		return this.clineStack.find((t) => t.taskId === taskId)
+	}
+
+	/**
+	 * 获取活跃任务信息列表
+	 */
+	private getActiveTasksInfo(): TaskInfo[] {
+		const activeTasks: TaskInfo[] = []
+
+		// 从调度器获取活跃任务
+		const schedulerTasks = this.taskScheduler.getActiveTasks()
+		for (const task of schedulerTasks) {
+			// 尝试获取任务标题，使用任务ID作为后备
+			let title = `Task ${task.taskId}`
+			// 尝试从任务历史中获取标题
+			const taskHistory = this.getGlobalState("taskHistory") || []
+			const historyItem = taskHistory.find((item: any) => item.id === task.taskId)
+			if (historyItem && historyItem.task) {
+				title = historyItem.task.length > 50 ? historyItem.task.substring(0, 47) + "..." : historyItem.task
+			}
+
+			// 获取任务模式，使用默认值作为后备
+			let mode = "code"
+			try {
+				// 尝试通过getTaskMode方法获取模式
+				mode = (task as any)._taskMode || "code"
+			} catch {
+				// 如果无法获取，使用默认值
+			}
+
+			activeTasks.push({
+				taskId: task.taskId,
+				title,
+				mode,
+				status: "active",
+				createdAt: historyItem?.ts || Date.now(),
+				updatedAt: Date.now(),
+			})
+		}
+
+		// 从队列中获取等待任务
+		const queuedTasks = this.taskScheduler.getQueuedTasks()
+		for (const task of queuedTasks) {
+			// 尝试获取任务标题
+			let title = `Task ${task.taskId}`
+			const taskHistory = this.getGlobalState("taskHistory") || []
+			const historyItem = taskHistory.find((item: any) => item.id === task.taskId)
+			if (historyItem && historyItem.task) {
+				title = historyItem.task.length > 50 ? historyItem.task.substring(0, 47) + "..." : historyItem.task
+			}
+
+			let mode = "code"
+			try {
+				mode = (task as any)._taskMode || "code"
+			} catch {
+				// 使用默认值
+			}
+
+			activeTasks.push({
+				taskId: task.taskId,
+				title,
+				mode,
+				status: "queued",
+				createdAt: historyItem?.ts || Date.now(),
+				updatedAt: Date.now(),
+			})
+		}
+
+		// 如果没有调度器任务，回退到栈中的任务（向后兼容）
+		if (activeTasks.length === 0 && this.clineStack.length > 0) {
+			for (const task of this.clineStack) {
+				let title = `Task ${task.taskId}`
+				const taskHistory = this.getGlobalState("taskHistory") || []
+				const historyItem = taskHistory.find((item: any) => item.id === task.taskId)
+				if (historyItem && historyItem.task) {
+					title = historyItem.task.length > 50 ? historyItem.task.substring(0, 47) + "..." : historyItem.task
+				}
+
+				let mode = "code"
+				try {
+					mode = (task as any)._taskMode || "code"
+				} catch {
+					// 使用默认值
+				}
+
+				activeTasks.push({
+					taskId: task.taskId,
+					title,
+					mode,
+					status: "active",
+					createdAt: historyItem?.ts || Date.now(),
+					updatedAt: Date.now(),
+				})
+			}
+		}
+
+		return activeTasks
 	}
 
 	async performPreparationTasks(cline: Task) {
@@ -443,6 +602,14 @@ export class ClineProvider
 
 		if (task) {
 			task.emit(RooCodeEventName.TaskUnfocused)
+
+			// 同时从调度器中取消任务
+			try {
+				await this.taskScheduler.cancelTask(task.taskId)
+				this.log(`Task ${task.taskId} cancelled from scheduler`)
+			} catch (error) {
+				this.log(`Failed to cancel task ${task.taskId} from scheduler: ${error}`)
+			}
 
 			try {
 				// Abort the running task and set isAbandoned to true so
@@ -1863,6 +2030,9 @@ export class ClineProvider
 			clineMessages: this.getCurrentTask()?.clineMessages || [],
 			currentTaskTodos: this.getCurrentTask()?.todoList || [],
 			messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
+			// 多任务支持
+			activeTasks: this.getActiveTasksInfo(),
+			currentTaskId: this.focusedTaskId,
 			taskHistory: (taskHistory || [])
 				.filter((item: HistoryItem) => item.ts && item.task)
 				.sort((a: HistoryItem, b: HistoryItem) => b.ts - a.ts),
@@ -2436,6 +2606,26 @@ export class ClineProvider
 	 */
 
 	public getCurrentTask(): Task | undefined {
+		// 多任务支持：如果有焦点任务ID，优先返回焦点任务
+		if (this.focusedTaskId) {
+			// 首先在调度器的活跃任务中查找
+			const activeTasks = this.taskScheduler.getActiveTasks()
+			const focusedTask = activeTasks.find((task) => task.taskId === this.focusedTaskId)
+			if (focusedTask) {
+				return focusedTask
+			}
+
+			// 如果在活跃任务中没找到，在栈中查找（向后兼容）
+			const stackTask = this.clineStack.find((task) => task.taskId === this.focusedTaskId)
+			if (stackTask) {
+				return stackTask
+			}
+
+			// 如果都没找到，清除焦点任务ID
+			this.focusedTaskId = undefined
+		}
+
+		// 如果没有焦点任务或找不到，回退到传统栈行为
 		if (this.clineStack.length === 0) {
 			return undefined
 		}

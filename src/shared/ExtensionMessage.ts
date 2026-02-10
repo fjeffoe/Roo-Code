@@ -47,6 +47,17 @@ export interface IndexingStatus {
 	workspacePath?: string
 }
 
+// 多任务信息类型
+export interface TaskInfo {
+	taskId: string
+	title: string
+	mode: string
+	status: "active" | "queued" | "paused" | "completed"
+	progress?: number
+	createdAt: number
+	updatedAt: number
+}
+
 export interface IndexingStatusUpdateMessage {
 	type: "indexingStatusUpdate"
 	values: IndexingStatus
@@ -347,6 +358,10 @@ export type ExtensionState = Pick<
 	messageQueue?: QueuedMessage[]
 	lastShownAnnouncementId?: string
 	apiModelId?: string
+
+	// 多任务并发支持
+	activeTasks?: TaskInfo[] // 当前活跃任务列表
+	currentTaskId?: string // 当前显示的任务ID
 	mcpServers?: McpServer[]
 	hasSystemPromptOverride?: boolean
 	mdmCompliant?: boolean
